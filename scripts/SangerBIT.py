@@ -13,16 +13,15 @@ import logging
 import argparse
 import textwrap
 import multiprocessing
+import numpy as np
 import pandas as pd
 from Bio.Seq import Seq
 from pyfaidx import Fasta
+#from bokeh.plotting import figure
+#from bokeh.models import ColumnDataSource, Range1d
+#from bokeh.models.glyphs import Text, Rect
 from Bio.Blast.Applications import NcbiblastnCommandline
 from Bio.Blast.Applications import NcbimakeblastdbCommandline
-from bokeh.plotting import figure
-from bokeh.models import ColumnDataSource, Range1d
-from bokeh.models.glyphs import Text, Rect
-import numpy as np
-
 
 description = '''
 ------------------------------------------------------------------------------------------------------------------------
@@ -45,6 +44,8 @@ csv = pd.read_csv(args.csv)
 ref = Fasta(args.ref)
 seq = os.path.abspath(args.seq)
 outdir = args.o
+
+# makedir outdir
 if os.path.exists(outdir):
 	pass
 else:
@@ -55,6 +56,7 @@ else:
 
 os.chdir(outdir)
 
+# main.log
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 rq = time.strftime('%Y%m%d%H%M', time.localtime(time.time()))
@@ -64,6 +66,7 @@ formatter = logging.Formatter("%(asctime)s - %(levelname)s: %(message)s")
 fh.setFormatter(formatter)
 logger.addHandler(fh)
 
+# refSeq length
 def reflen(x):
 	with open('refSeq/'+x+'_ref.fa','w') as f:
 		rseq = str(ref[x][:].seq)
@@ -72,33 +75,34 @@ def reflen(x):
 
 csv['RefLen'] = csv['RefID'].apply(reflen)
 
-for i in range(len(csv)):
-	sample = csv['Sample'].values[i]
-	os.system('mkdir -p '+sample)
-	with open(sample+'/'+sample,'w') as f:
-		# Forward sequence 
-		fas_f = Fasta(seq+'/'+csv['Forward'].values[i])
-		seq_f = str(fas_f[list(fas_f.keys())[0]][:].seq)
-		# Reverse sequence
-		fas_r = Fasta(seq+'/'+csv['Reverse'].values[i])
-		seq_r = str(Seq(str(fas_r[list(fas_r.keys())[0]][:].seq)).reverse_complement())
-		f.write('>f'+str(i)+'\n'+seq_f+'\n>r'+str(i)+'\n'+seq_r+'\n')
+for i,j in csv.groupby('RefID'):
+	for v in range(len(j)):
+		vi = j['Sample'].values[v]
+		os.system('mkdir -p '+i+'/'+vi)
+		with open(i+'/'+vi+'/'+vi,'w') as f:
+			# Forward sequence 
+			fas_f = Fasta(seq+'/'+j['Forward'].values[v])
+			seq_f = str(fas_f[list(fas_f.keys())[0]][:].seq)
+			# Reverse sequence
+			fas_r = Fasta(seq+'/'+j['Reverse'].values[v])
+			seq_r = str(Seq(str(fas_r[list(fas_r.keys())[0]][:].seq)).reverse_complement())
+			f.write('>f'+str(v)+'\n'+seq_f+'\n>r'+str(v)+'\n'+seq_r+'\n')
 
 def pool_run(t):
 	sam = csv['Sample'].values[t]
-	sam = sam+'/'+sam
+	sam = csv['RefID'].values[t]+'/'+sam+'/'+sam
 	logger.info('cap3 '+sam+' > '+sam+'.o')
-	#os.system('cap3 '+sam+' > '+sam+'.o && sync')
+	os.system('cap3 '+sam+' > '+sam+'.o && sync')
 	if os.path.getsize(sam+'.cap.contigs') != 0:
-		#cmd1 = NcbimakeblastdbCommandline(dbtype='nucl',input_file=sam+'.cap.contigs')
-		#stdout,stderr = cmd1()
-		#cmd2 = NcbiblastnCommandline(query='refSeq/'+csv['RefID'].values[t]+'_ref.fa',db=sam+'.cap.contigs',outfmt=6,out=sam+'.blast.o')
-		#stdout,stderr = cmd2()
+		cmd1 = NcbimakeblastdbCommandline(dbtype='nucl',input_file=sam+'.cap.contigs')
+		stdout,stderr = cmd1()
+		cmd2 = NcbiblastnCommandline(query='refSeq/'+csv['RefID'].values[t]+'_ref.fa',db=sam+'.cap.contigs',outfmt=6,out=sam+'.blast.o')
+		stdout,stderr = cmd2()
 		if os.path.getsize(sam+'.blast.o') != 0:
 			dfx = pd.read_csv(sam+'.blast.o',sep='\t',header=None)
 			start = dfx[8].values[0]
 			end = dfx[9].values[0]
-			#if int(dfx[2].values[0]) != 0:
+			
 			with open(sam+'_trim.fa','w') as f:
 				capFas = Fasta(sam+'.cap.contigs')
 				seqtrim =  Seq(str(capFas['Contig1'][end-1:start].seq)).reverse_complement()
@@ -125,38 +129,41 @@ if __name__ == "__main__":
 	for i in range(len(csv)):
 		process['q'+str(i)].join()	
 
-	def cap3(x):
-		if os.path.getsize(x+'/'+x+'.cap.contigs') != 0:
+	def cap3(x,y):
+		if os.path.getsize(y+'/'+x+'/'+x+'.cap.contigs') != 0:
 			return 1
 		else:
 			return 0
-	csv['CAP3']  = csv['Sample'].apply(cap3)
 
-	def blast(x):
-		if os.path.exists(x+'/'+x+'.fmt6.o'):
+	csv['CAP3']  = csv.apply(lambda row:cap3(row['Sample'],row['RefID']),axis=1)
+
+	def blast(x,y):
+		if os.path.exists(y+'/'+x+'/'+x+'.fmt6.o'):
 			return 1
 		else:
 			return 0
-	csv['BLAST'] = csv['Sample'].apply(blast)
 
-	def blastout(x,col):
-		if os.path.exists(x+'/'+x+'.fmt6.o'):
-			if os.path.getsize(x+'/'+x+'.fmt6.o') != 0:
-				tab = pd.read_csv(x+'/'+x+'.fmt6.o',sep='\t',header=None)
+	csv['BLAST'] = csv.apply(lambda row:blast(row['Sample'],row['RefID']),axis=1)
+
+
+	def blastout(x,y,col):
+		if os.path.exists(y+'/'+x+'/'+x+'.fmt6.o'):
+			if os.path.getsize(y+'/'+x+'/'+x+'.fmt6.o') != 0:
+				tab = pd.read_csv(y+'/'+x+'/'+x+'.fmt6.o',sep='\t',header=None)
 				return tab[col].values[0]
 			else:
 				return 0
 		else:
 			return 0
 
-	csv['pident'] = csv.apply(lambda row:blastout(row['Sample'],2),axis=1)
-	csv['length'] = csv.apply(lambda row:blastout(row['Sample'],3),axis=1)
-	csv['mismatch'] = csv.apply(lambda row:blastout(row['Sample'],4),axis=1)
-	csv['gapopen'] = csv.apply(lambda row:blastout(row['Sample'],5),axis=1)
-	csv['sstart'] = csv.apply(lambda row:blastout(row['Sample'],8),axis=1)
-	csv['send'] = csv.apply(lambda row:blastout(row['Sample'],9),axis=1)
-	csv['evalue'] = csv.apply(lambda row:blastout(row['Sample'],10),axis=1)	
-	csv['bitscore'] = csv.apply(lambda row:blastout(row['Sample'],11),axis=1)
+	csv['pident'] = csv.apply(lambda row:blastout(row['Sample'],row['RefID'],2),axis=1)
+	csv['length'] = csv.apply(lambda row:blastout(row['Sample'],row['RefID'],3),axis=1)
+	csv['mismatch'] = csv.apply(lambda row:blastout(row['Sample'],row['RefID'],4),axis=1)
+	csv['gapopen'] = csv.apply(lambda row:blastout(row['Sample'],row['RefID'],5),axis=1)
+	csv['sstart'] = csv.apply(lambda row:blastout(row['Sample'],row['RefID'],8),axis=1)
+	csv['send'] = csv.apply(lambda row:blastout(row['Sample'],row['RefID'],9),axis=1)
+	csv['evalue'] = csv.apply(lambda row:blastout(row['Sample'],row['RefID'],10),axis=1)	
+	csv['bitscore'] = csv.apply(lambda row:blastout(row['Sample'],row['RefID'],11),axis=1)
 
 	csv = csv.sort_values(by=['RefID','Sample'])
 	csv.to_csv('result_summary.tab',sep='\t',index=None)
