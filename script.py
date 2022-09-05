@@ -148,8 +148,8 @@ def get_single_colors(seqList):
 	return colorBox
 
 def get_rainbow_colors(seqList):
-	base = [bases for sequences in list(seqs) for bases in sequences]
-	clrs = {"A":"red","T":"green","C":"blue","G":"orange","-":"gray"}
+	base = [bases for sequences in list(seqList) for bases in sequences]
+	clrs = {"A":"red","T":"green","C":"blue","G":"orange","-":"gray","N":"gray"}
 	colorBox = [clrs[i] for i in base]
 	return colorBox
 
